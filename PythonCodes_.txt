@@ -1,0 +1,186 @@
+
+import numpy as np
+import scipy as sc
+import scipy.stats as st
+import matplotlib.pyplot as plt
+import matplotlib.ticker as tkr
+from sklearn.neighbors import KDTree
+GR = (1+np.sqrt(5))/2 # aspect ratio for plots
+\end{minted}
+\begin{minted}{python}
+# Multivariate Gaussian distribution
+def create_points_GG(npts, dim=2, expo=2, std=True):
+    ''' 
+    If X = UR where U is uniformly distributed on the unit sphere in R^m 
+    and R = V^{1/s} where V ~ Gamma(m/s,2) then X ~ GG(m,s). From (Solaro 2004).
+    '''
+    # set mean vector and covariance matrix
+    mvec = [0]*dim
+    cmtx = np.identity(dim)
+    # create isotropic normal vectors
+    zpts = st.multivariate_normal.rvs(mvec, cmtx, npts)
+    # project onto sphere
+    upts = np.array([z/np.linalg.norm(z) for z in zpts])
+    # create gamma values
+    gvals = st.gamma.rvs(dim/expo, scale=2, size=npts)**(1/expo)
+    # create points
+    points = np.multiply(upts, gvals[:, np.newaxis]) if dim > 1 else 
+    np.reshape(np.multiply(upts, gvals),(npts,1))
+    # standardise if required
+    if std:
+        sf = (2**(2/expo))*sc.special.gamma((dim+2)/expo)/
+        (dim*sc.special.gamma(dim/expo))
+        points = points/np.sqrt(sf)
+    return points
+\end{minted}
+\begin{minted}{python}
+# Multivariate Student-t distribution
+def create_points_T(npts, dim=2, dof=10, std=False):
+    '''If X = Z/\sqrt{G} where Z ~ N(0,I_m) and G ~ 
+    Gamma(nu/2,2/nu) then  X ~ IST(m,nu)'''
+    # set mean vector and covariance matrix
+    mvec = [0]*dim
+    cmtx = np.identity(dim)
+    # create normal vectors
+    zpts = np.random.multivariate_normal(mvec, cmtx, npts)
+    # create gamma values
+    gvals = np.tile(np.random.gamma(dof/2.0, 2.0/dof, npts),(dim,1)).T
+    # create points
+    points = zpts/np.sqrt(gvals)
+    # standardise if required
+    if std:
+        sf = dof/(dof-2) 
+        points = points/np.sqrt(sf)
+    return(points)
+\begin{minted}{python}
+def compute_constant(dim=2, expo=2):
+    return (expo*np.e/dim)**(dim/expo)*np.pi**(dim/2)*sc.special.gamma
+    (dim/expo+1)/sc.special.gamma(dim/2+1)
+\end{minted}
+\begin{minted}{python}
+def compute_sample_moment(points, expo):
+    # Euclidean norms
+    norms = np.sqrt(np.sum(points**2, axis=1)) 
+    # power-weighted norms
+    pw_norms = norms**expo 
+    # value
+    return np.mean(pw_norms)
+\end{minted}
+\begin{minted}{python}
+def compute_near_neighbour_distances(points, nnmax):
+    # search tree
+    tree = KDTree(points)
+    # extract distances
+    dist, ind = tree.query(points, k=nnmax+1)
+    # exclude zeroth neighbour (the point itself)
+    return dist[:,1:]
+\end{minted}
+\begin{minted}{python}
+def compute_entropy_estimates(points, nnmax=1):
+    # dimensions 
+    npts, dim = points.shape
+    # volume of unit ball 
+    vub = (np.pi**(dim/2))/(sc.special.gamma(dim/2 + 1))
+    # digamma function values (scipy.special.digamma is slow)
+    psi = -np.euler_gamma + np.array([0] + 
+    [1/i for i in range(1,nnmax)]).cumsum()
+    # near neighbour distances
+    nnd = compute_near_neighbour_distances(points, nnmax)
+    # geometric means
+    gmeans = sc.stats.mstats.gmean(nnd)
+    # value
+    return m*np.log(gmeans) + np.log(vub) + np.log(npts-1) - psi
+\end{minted}
+\begin{minted}{python}
+def compute_statistics(points, expo=2, nnmax=1):
+    # dimensions 
+    npts, dim = points.shape
+    # entropy estimates
+    eest = compute_entropy_estimates(points, nnmax)
+    # moment estimate
+    smom = compute_sample_moment(points, expo)
+    # constant
+    const = compute_constant(dim, expo)
+    # value
+    return eest - (dim/expo)*np.log(smom) - np.log(const)
+\end{minted}
+\begin{minted}{python}
+# Set parameter values
+# These are used further down!
+# dimension
+mvals = np.array([1,2,3])
+# neighbours
+kvals = np.array([1,2,3])
+# exponent
+svals = np.array([0.5, 1.0, 1.5, 2.0, 2.5])
+# sample size
+Nmin = 10, Nmax = 500, Ninc = 10
+Nvals = np.arange(start=Nmin, stop=Nmax+1, step=Ninc)
+# repetitions
+nreps = 10
+\end{minted}
+\begin{minted}{python}
+# Create data
+def create_data(Nvals, mvals, svals, kvals, nreps):
+    # init memory
+    datacube = np.zeros(shape=(nreps,len(Nvals),len(mvals), 
+    len(svals), len(svals), len(kvals)))
+    # info
+    import datetime
+    print('Started at: {}'.format(datetime.datetime.now()))
+    # main loop 
+    for rep in range(nreps):
+        # progress bar
+        print('\r' + 'x'*(rep+1) + '-'*(nreps-rep-1), end='')
+        # iterate over m-values
+        for midx, m in enumerate(mvals):
+            # iterate over sR-values (reality)
+            for sRidx, sR in enumerate(svals):
+                # create sample
+                pts = create_points_GG(Nmax, dim=m, expo=sR)
+                # iterate over subsamples
+                for Nidx, N in enumerate(Nvals):
+                    #iterate over sH-values (hypothesised)
+                    for sHidx, sH in enumerate(svals):
+                       datacube[rep,Nidx,midx,sRidx,sHidx:]= 
+                      compute_statistic(pts[:N], expo=sH,
+                      nnmax=len(kvals))
+    print('Ended at:   {}'.format(datetime.datetime.now()))
+    return(datacube)
+# check
+if input("Generate data: are you sure? (y/n)") == "y":
+    data  = create_data(Nvals, mvals, svals, kvals, nreps)
+\end{minted}
+\begin{minted}{python}
+# save data
+np.save('datacube1.npy', data)
+data.shape
+\end{minted}
+\begin{minted}{python}
+# load data
+data2 = np.load('datacube1.npy')
+data2.shape
+\end{minted}
+\begin{minted}{python}
+# plot separately with errorbars (k fixed)
+kval = 1
+kidx = np.where(kvals==kval)[0][0]
+width = 12
+fig, axes = plt.subplots(nrows=len(svals), ncols=len(mvals), 
+sharex=True, sharey=True, figsize=(width,1.5*width))
+for sidx, sval in enumerate(svals):
+    for midx, mval in enumerate(mvals):
+        ax = axes[sidx,midx]
+        ax.axhline(y=0, linewidth=1, color='k')
+        desc = st.describe(data[:,:,midx,sidx,sidx,kidx])
+        ax.errorbar(x=Nvals, y=desc.mean, yerr=np.sqrt(desc.variance)/
+        np.sqrt(nreps), capsize=5, errorevery=5)
+        ax.set_title('m={}, s={}, k={}'.format(mval,sval,kval));
+        if sidx == len(svals)-1: ax.set_xlabel('$N$', fontsize=12)
+        if midx == 0: ax.set_ylabel('$T_{N,k}(m,s)$', fontsize=16)
+        ax.set_xlim([Nmin,Nmax])        
+        ax.set_ylim([-0.05,0.05]) # tweak        
+        ax.grid(1);    
+fig.tight_layout()
+plt.savefig('consistency-k={}.png'.format(kval))
+plt.show();    
